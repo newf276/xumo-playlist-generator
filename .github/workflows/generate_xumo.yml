@@ -1,0 +1,127 @@
+# This is the full path: .github/workflows/generate_xumo.yml
+
+name: Generate Xumo Playlist and EPG
+
+on:
+  workflow_dispatch: # Allows manual triggering from the Actions tab in GitHub
+  schedule:
+    # Runs around 4 AM UTC daily (adjust cron schedule as needed)
+    # See: https://crontab.guru/
+    - cron: '0 4 * * *'
+
+jobs:
+  generate: # Name of the job
+    runs-on: ubuntu-latest # Use the latest Ubuntu runner
+
+    steps:
+      # Step 1: Check out the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Or your desired Python version
+
+      # Step 3: Install required Python dependencies
+      - name: Install dependencies
+        run: pip install requests # Add other dependencies here if needed
+
+      # Step 4: Run the Python script to generate the files and add debugging
+      - name: Run Xumo Scraper and Debug File Output
+        id: scraper
+        run: |
+          echo "--- Current Directory ---"
+          pwd
+
+          echo "--- Workspace contents BEFORE script ---"
+          ls -la
+
+          echo "--- 'playlists' dir contents BEFORE script ---"
+          ls -la playlists/ || echo "INFO: 'playlists' directory does not exist yet."
+
+          # --- IMPORTANT: REPLACE 'your_script_name.py' with the actual filename ---
+          echo "--- Running Python Script: generate_xumo.py ---" # Assuming this is your filename now
+          python generate_xumo.py # <<< CHANGE THIS FILENAME if it's different
+
+          echo "--- Python Script Finished ---"
+
+          echo "--- Workspace contents AFTER script ---"
+          ls -la
+
+          echo "--- 'playlists' dir contents AFTER script ---"
+          ls -la playlists/ || echo "ERROR: 'playlists' directory NOT FOUND after script run!"
+
+          echo "--- Checking file existence ---"
+          if [ -f "playlists/xumo_playlist.m3u" ]; then
+            echo "INFO: playlists/xumo_playlist.m3u EXISTS."
+            echo "changes_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "ERROR: playlists/xumo_playlist.m3u MISSING! Cannot commit."
+            echo "changes_found=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ -f "playlists/xumo_epg.xml.gz" ]; then
+            echo "INFO: playlists/xumo_epg.xml.gz EXISTS."
+          else
+            echo "WARNING: playlists/xumo_epg.xml.gz MISSING!"
+          fi
+
+      # Step 5: Commit and push the changes *only if* the scraper step found the playlist file
+      - name: Commit and Push Changes
+        if: steps.scraper.outputs.changes_found == 'true'
+        run: |
+          # Configure Git
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          echo "--- Running git status before add ---"
+          git status --untracked-files=no
+
+          # Check if git *thinks* there are changes before forcing the add
+          # This is just for logging comparison
+          if git status --porcelain playlists/xumo_playlist.m3u playlists/xumo_epg.xml.gz | grep -E '^[ AM]'; then
+             echo "INFO: Git status detected changes before add."
+          else
+             echo "INFO: Git status detected NO changes before add. Forcing add to test .gitignore..."
+          fi
+
+          # --- MODIFICATION HERE: Use --force ---
+          echo "--- Attempting: git add --force playlists/... ---"
+          git add --force playlists/xumo_playlist.m3u playlists/xumo_epg.xml.gz
+
+          echo "--- Running git status after add --force ---"
+          git status
+
+          # Commit the changes. If 'git add --force' staged something, this should commit.
+          # If the content was truly identical, commit might still say nothing to commit.
+          echo "--- Attempting commit ---"
+          git commit -m "Update Xumo M3U playlist and EPG ($(date +'%Y-%m-%d %H:%M:%S %Z')) [skip ci]" || echo "INFO: No changes to commit (content likely identical or add failed)."
+
+          # Only try pushing if the commit command actually created a commit
+          # Check if HEAD changed compared to remote origin/main
+          if ! git diff --quiet HEAD origin/main -- playlists/; then
+             echo "--- Commit successful, attempting to push changes ---"
+             # Retry push logic
+             n=0
+             until [ $n -ge 5 ]
+             do
+                git push && break
+                n=$((n+1))
+                echo "WARNING: Push failed. Retrying attempt $n/5 in 15 seconds..."
+                sleep 15
+             done
+
+             if [ $n -ge 5 ]; then
+                echo "::error::Failed to push Xumo changes after multiple attempts."
+                exit 1
+             fi
+             echo "--- Push successful ---"
+          else
+              echo "INFO: No effective changes were committed (HEAD matches origin/main for playlists/). Nothing to push."
+              exit 0
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
