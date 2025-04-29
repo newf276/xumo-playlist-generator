@@ -7,7 +7,7 @@ on:
   schedule:
     # Runs around 4 AM UTC daily (adjust cron schedule as needed)
     # See: https://crontab.guru/
-    - cron: '0 4 * * *'
+    - cron: '0 2 * * *'
 
 jobs:
   generate: # Name of the job
